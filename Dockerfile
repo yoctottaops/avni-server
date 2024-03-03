@@ -5,7 +5,7 @@ RUN apk update && apk add git
 WORKDIR /avni-webapp
 
 
-COPY ../avni-webapp/ ./
+COPY ./avni-webapp/ ./
 
 RUN yarn install
 RUN yarn build
@@ -18,13 +18,11 @@ FROM openjdk:8-jdk
 WORKDIR /avni
 
 # build
-COPY . ./
+COPY ./avni-server ./
 RUN ./gradlew clean build -x test
 
 # expose port
 EXPOSE 8081
-
-
 
 # run
 CMD ["java", "-jar", "./avni-server-api/build/libs/avni-server-0.0.1-SNAPSHOT.jar"]
