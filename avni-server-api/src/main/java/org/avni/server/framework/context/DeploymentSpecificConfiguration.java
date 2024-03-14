@@ -1,18 +1,11 @@
 package org.avni.server.framework.context;
 
 import org.avni.server.application.OrganisationConfigSettingKey;
-import org.avni.server.config.AvniKeycloakConfig;
-import org.avni.server.config.CognitoConfig;
-import org.avni.server.dao.UserRepository;
-import org.avni.server.domain.JsonObject;
 import org.avni.server.domain.Organisation;
 import org.avni.server.domain.OrganisationConfig;
 import org.avni.server.domain.User;
 import org.avni.server.framework.security.UserContextHolder;
 import org.avni.server.service.*;
-import org.avni.server.web.AuthDetailsController;
-import org.keycloak.OAuth2Constants;
-import org.keycloak.representations.adapters.config.AdapterConfig;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -71,12 +64,13 @@ public class DeploymentSpecificConfiguration {
     public S3Service getBatchS3Service() {
         if (springProfiles.isOnPremise() && awsMinioService != null)
             return awsMinioService;
-
+            
+        if (awsMinioService != null)
+            return awsMinioService;
+            
         if (awss3Service != null)
             return awss3Service;
 
-        if (awsMinioService != null)
-            return awsMinioService;
 
         throw new NoSuchBeanDefinitionException("BatchS3Service", "Batch Storage service bean of type BatchS3Service not found");
     }
