@@ -1,5 +1,6 @@
 package org.avni.server.dao;
 
+import org.avni.server.application.Subject;
 import org.avni.server.dao.sync.SyncEntityName;
 import org.avni.server.dao.sync.TransactionDataCriteriaBuilderUtil;
 import org.avni.server.domain.*;
@@ -18,7 +19,7 @@ import java.util.List;
 
 @SuppressWarnings("rawtypes")
 @NoRepositoryBean
-public interface OperatingIndividualScopeAwareRepository<T extends CHSEntity> extends JpaSpecificationExecutor<T>, CustomCHSJpaRepository<T, Long> {
+public interface OperatingIndividualScopeAwareRepository<T extends CHSEntity> extends JpaSpecificationExecutor<T>, CustomCHSJpaRepository<T, Long>, SyncableRepository<T> {
     default Specification getSpecification(SyncParameters syncParameters) {
         Specification specification;
         if (syncParameters.isModificationCheckOnEntity()) {
@@ -35,16 +36,19 @@ public interface OperatingIndividualScopeAwareRepository<T extends CHSEntity> ex
         return specification;
     }
 
+    @Override
     default Slice<T> getSyncResultsAsSlice(SyncParameters syncParameters) {
         Specification specification = getSpecification(syncParameters);
         return findAllAsSlice(specification, syncParameters.getPageable());
     }
 
+    @Override
     default Page<T> getSyncResults(SyncParameters syncParameters) {
         Specification specification = getSpecification(syncParameters);
         return findAll(specification, syncParameters.getPageable());
     }
 
+    @Override
     boolean isEntityChanged(SyncParameters syncParameters);
 
     default Specification<T> getAuditSpecification(SyncParameters syncParameters) {
@@ -128,6 +132,15 @@ public interface OperatingIndividualScopeAwareRepository<T extends CHSEntity> ex
 
                 query.orderBy(cb.asc(lastModifiedDateTimePath), cb.asc(userSubjectAssignmentJoin.get("id")));
             }
+        }
+        if (Subject.User.equals(subjectType.getType())) {
+            From fromSubject;
+            if (syncParameters.getSyncEntityName().equals(SyncEntityName.Individual))
+                fromSubject = from;
+            else
+                fromSubject = TransactionDataCriteriaBuilderUtil.joinSubjectForUserSubjectType(syncParameters, from);
+            predicates.add(cb.equal(fromSubject.get("subjectType").get("type"), Subject.User));
+            predicates.add(cb.equal(fromSubject.join("userSubjects").get("user"), user));
         }
         addSyncAttributeConceptPredicate(cb, predicates, from, syncParameters, "syncConcept1Value", "syncConcept2Value");
     }

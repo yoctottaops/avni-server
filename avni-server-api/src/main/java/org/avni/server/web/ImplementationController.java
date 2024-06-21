@@ -3,6 +3,7 @@ package org.avni.server.web;
 import org.avni.server.domain.Concept;
 import org.avni.server.domain.Organisation;
 import org.avni.server.domain.accessControl.PrivilegeType;
+import org.avni.server.domain.metadata.OrganisationCategory;
 import org.avni.server.framework.security.UserContextHolder;
 import org.avni.server.service.OrganisationService;
 import org.avni.server.service.accessControl.AccessControlService;
@@ -13,7 +14,6 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
@@ -22,6 +22,8 @@ import org.springframework.web.bind.annotation.RestController;
 import javax.transaction.Transactional;
 import java.io.ByteArrayOutputStream;
 import java.util.zip.ZipOutputStream;
+
+import static org.avni.server.domain.accessControl.PrivilegeType.MultiTxEntityTypeUpdate;
 
 @RestController
 public class ImplementationController implements RestControllerResourceProcessor<Concept> {
@@ -43,6 +45,13 @@ public class ImplementationController implements RestControllerResourceProcessor
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         //ZipOutputStream will be automatically closed because we are using try-with-resources.
+        /**
+         * IMPORTANT: The un-tampered bundle is processed in the order of files inserted while generating the bundle,
+         * which is as per below code.
+         *
+         * Always ensure that bundle is created with content in the same sequence that you want it to be processed during upload.
+         * DISCLAIMER: If the bundle is tampered, for example to remove any forms or concepts, then the sequence of processing of bundle files is unknown
+         */
         try (ZipOutputStream zos = new ZipOutputStream(baos)) {
             organisationService.addAddressLevelTypesJson(orgId, zos);
             if (includeLocations) {
@@ -70,12 +79,17 @@ public class ImplementationController implements RestControllerResourceProcessor
             organisationService.addVideoJson(zos);
             organisationService.addReportCards(zos);
             organisationService.addReportDashboard(zos);
+            organisationService.addGroupDashboardJson(zos);
             organisationService.addDocumentation(zos);
             organisationService.addTaskType(zos);
             organisationService.addTaskStatus(zos);
-            organisationService.addIcons(zos);
+            organisationService.addSubjectTypeIcons(zos);
+            organisationService.addReportCardIcons(zos);
             organisationService.addApplicationMenus(zos);
             organisationService.addMessageRules(zos);
+            organisationService.addTranslations(orgId, zos);
+            organisationService.addOldRuleDependency(orgId, zos);
+            organisationService.addOldRules(orgId, zos);
         }
 
         byte[] baosByteArray = baos.toByteArray();
@@ -91,12 +105,26 @@ public class ImplementationController implements RestControllerResourceProcessor
     @RequestMapping(value = "/implementation/delete", method = RequestMethod.DELETE)
     @Transactional
     public ResponseEntity delete(@Param("deleteMetadata") boolean deleteMetadata) {
-        accessControlService.checkPrivilege(PrivilegeType.DownloadBundle);
+        if (accessControlService.isSuperAdmin()) {
+            return new ResponseEntity<>("Super admin cannot delete implementation data", HttpStatus.FORBIDDEN);
+        }
+        Organisation organisation = organisationService.getCurrentOrganisation();
+        if (OrganisationCategory.Production.equals(organisation.getCategory())) {
+            return new ResponseEntity<>("Production organisation's data cannot be deleted", HttpStatus.CONFLICT);
+        }
+
+        accessControlService.checkPrivilege(MultiTxEntityTypeUpdate);
         organisationService.deleteTransactionalData();
+
         if (deleteMetadata) {
+            accessControlService.checkPrivilege(PrivilegeType.DownloadBundle);
             organisationService.deleteMetadata();
         }
         organisationService.deleteMediaContent(deleteMetadata);
+
+        if (deleteMetadata)
+            organisationService.setupBaseOrganisationData(UserContextHolder.getOrganisation());
+
         return new ResponseEntity<>(HttpStatus.OK);
     }
 

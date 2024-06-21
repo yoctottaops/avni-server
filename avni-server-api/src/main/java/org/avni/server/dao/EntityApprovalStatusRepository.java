@@ -1,9 +1,10 @@
 package org.avni.server.dao;
 
 import org.avni.server.dao.sync.SyncEntityName;
-import org.avni.server.domain.AddressLevel;
-import org.avni.server.domain.EntityApprovalStatus;
+import org.avni.server.domain.*;
 import org.avni.server.framework.security.UserContextHolder;
+import org.avni.server.web.request.EntitySyncStatusContract;
+import org.joda.time.DateTime;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
@@ -16,10 +17,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Repository;
 
-import javax.persistence.criteria.CriteriaBuilder;
-import javax.persistence.criteria.CriteriaQuery;
-import javax.persistence.criteria.Predicate;
-import javax.persistence.criteria.Root;
+import javax.persistence.criteria.*;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
@@ -36,6 +34,35 @@ public interface EntityApprovalStatusRepository extends TransactionalDataReposit
             @Param("now") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date now,
             Pageable pageable);
 
+    default Page<EntityApprovalStatus> findEntityApprovalStatuses(EntityApprovalStatusSearchParams searchParams, Pageable pageable) {
+
+        Specification specification = lastModifiedBetween(
+            CHSEntity.toDate(searchParams.getLastModifiedDateTime() != null ? searchParams.getLastModifiedDateTime() : EntitySyncStatusContract.REALLY_OLD_DATE),
+            CHSEntity.toDate(searchParams.getNow() != null ? searchParams.getNow() : new DateTime()));
+
+        if (searchParams.getEntityType() != null) {
+            specification = specification.and(findByEntityTypeSpec(searchParams.getEntityType()));
+        }
+        if (searchParams.getEntityTypeUuid() != null) {
+            specification = specification.and(findByEntityTypeUuidSpec(searchParams.getEntityTypeUuid()));
+        }
+
+        return findAll(specification, pageable);
+    }
+
+    default Specification<EntityApprovalStatus> findByEntityTypeSpec(EntityApprovalStatus.EntityType entityType) {
+        Specification<EntityApprovalStatus> spec = (Root<EntityApprovalStatus> root, CriteriaQuery<?> query, CriteriaBuilder cb) -> {
+            return cb.and(cb.equal(root.get("entityType"), entityType));
+        };
+        return spec;
+    }
+
+    default Specification<EntityApprovalStatus> findByEntityTypeUuidSpec(String entityTypeUuid) {
+        Specification<EntityApprovalStatus> spec = (Root<EntityApprovalStatus> root, CriteriaQuery<?> query, CriteriaBuilder cb) -> {
+            return cb.and(cb.equal(root.get("entityTypeUuid"), entityTypeUuid));
+        };
+        return spec;
+    }
     List<EntityApprovalStatus> findByEntityIdAndEntityTypeAndIsVoidedFalse(Long entityId, EntityApprovalStatus.EntityType entityType);
     EntityApprovalStatus findFirstByEntityIdAndEntityTypeAndIsVoidedFalseOrderByStatusDateTimeDesc(Long entityId, EntityApprovalStatus.EntityType entityType);
 
@@ -90,7 +117,7 @@ public interface EntityApprovalStatusRepository extends TransactionalDataReposit
     }
 
     @Modifying
-    @Query(value = "update entity_approval_status e set is_voided = true, last_modified_date_time = (current_timestamp + e.id * (interval '1 millisecond')/1000), last_modified_by_id = :lastModifiedById " +
+    @Query(value = "update entity_approval_status e set is_voided = true, last_modified_date_time = (current_timestamp + random() * 5000 * (interval '1 millisecond')), last_modified_by_id = :lastModifiedById " +
             "from individual i" +
             " where i.address_id = :addressId and i.id = e.individual_id and e.is_voided = false", nativeQuery = true)
     void voidSubjectsAt(Long addressId, Long lastModifiedById);

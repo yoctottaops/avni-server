@@ -56,6 +56,11 @@ public class SubjectType extends OrganisationAwareEntity implements NamedEntity 
     @Column(name = "icon_file_s3_key")
     private String iconFileS3Key;
 
+    //  Check keys in SubjectTypeSettingKeys
+    @Column
+    @Type(type = "jsonObject")
+    private JsonObject settings;
+
     @Embedded
     @AttributeOverrides({
             @AttributeOverride(name = "regex",
@@ -192,6 +197,7 @@ public class SubjectType extends OrganisationAwareEntity implements NamedEntity 
                 .collect(Collectors.toList());
     }
 
+    // Used from projections
     @JsonIgnore
     public List<String> getMemberSubjectUUIDs() {
         return isGroup() ? groupRoles.stream()
@@ -284,7 +290,7 @@ public class SubjectType extends OrganisationAwareEntity implements NamedEntity 
     }
 
     public boolean isDirectlyAssignable() {
-        return isDirectlyAssignable;
+        return isDirectlyAssignable && !Subject.User.equals(this.type);
     }
 
     public void setDirectlyAssignable(boolean directlyAssignable) {
@@ -292,7 +298,7 @@ public class SubjectType extends OrganisationAwareEntity implements NamedEntity 
     }
 
     public boolean isShouldSyncByLocation() {
-        return shouldSyncByLocation;
+        return shouldSyncByLocation && !Subject.User.equals(this.type);
     }
 
     public void setShouldSyncByLocation(boolean shouldSyncByLocation) {
@@ -355,6 +361,14 @@ public class SubjectType extends OrganisationAwareEntity implements NamedEntity 
         this.programEligibilityCheckDeclarativeRule = programEligibilityCheckDeclarativeRule;
     }
 
+    public JsonObject getSettings() {
+        return settings;
+    }
+
+    public void setSettings(JsonObject settings) {
+        this.settings = settings;
+    }
+
     @Projection(name = "SubjectTypeProjection", types = {SubjectType.class})
     public interface SubjectTypeProjection extends BaseProjection {
         String getName();
@@ -384,6 +398,8 @@ public class SubjectType extends OrganisationAwareEntity implements NamedEntity 
         Format getValidLastNameFormat();
 
         List<GroupRole.GroupRoleProjection> getGroupRoles();
+
+        JsonObject getSettings();
     }
 
     @Override

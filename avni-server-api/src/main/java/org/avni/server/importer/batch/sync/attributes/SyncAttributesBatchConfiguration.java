@@ -43,7 +43,6 @@ public class SyncAttributesBatchConfiguration {
         }};
     }
 
-
     @Bean
     public Job syncAttributesJob(SyncAttributesJobListener listener, Step updateSyncAttributesStep) {
         return jobBuilderFactory

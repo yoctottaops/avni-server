@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.PrettyPrinter;
 import com.fasterxml.jackson.core.util.DefaultPrettyPrinter;
 import org.apache.commons.io.IOUtils;
 import org.avni.messaging.contract.MessageRuleContract;
+import org.avni.messaging.repository.MessageReceiverRepository;
+import org.avni.messaging.repository.MessageRequestQueueRepository;
 import org.avni.messaging.service.MessagingService;
 import org.avni.server.application.Form;
 import org.avni.server.application.FormMapping;
@@ -16,11 +18,16 @@ import org.avni.server.dao.individualRelationship.IndividualRelationGenderMappin
 import org.avni.server.dao.individualRelationship.IndividualRelationRepository;
 import org.avni.server.dao.individualRelationship.IndividualRelationshipRepository;
 import org.avni.server.dao.individualRelationship.IndividualRelationshipTypeRepository;
+import org.avni.server.dao.program.SubjectProgramEligibilityRepository;
+import org.avni.server.dao.task.TaskRepository;
 import org.avni.server.domain.*;
+import org.avni.server.framework.security.UserContextHolder;
+import org.avni.server.importer.batch.model.BundleFolder;
 import org.avni.server.service.application.MenuItemService;
 import org.avni.server.util.ObjectMapperSingleton;
 import org.avni.server.util.S;
 import org.avni.server.util.S3File;
+import org.avni.server.web.contract.GroupDashboardBundleContract;
 import org.avni.server.web.request.*;
 import org.avni.server.web.request.application.ChecklistDetailRequest;
 import org.avni.server.web.request.application.FormContract;
@@ -36,7 +43,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.repository.CrudRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.io.File;
 import java.io.IOException;
@@ -50,7 +59,6 @@ import java.util.zip.ZipOutputStream;
 
 @Service
 public class OrganisationService {
-
     private final FormRepository formRepository;
     private final AddressLevelTypeRepository addressLevelTypeRepository;
     private final LocationRepository locationRepository;
@@ -119,6 +127,17 @@ public class OrganisationService {
     private final TaskTypeService taskTypeService;
     private final TaskStatusService taskStatusService;
     private final EntityTypeRetrieverService entityTypeRetrieverService;
+    private final RuleDependencyRepository ruleDependencyRepository;
+    private final RuleRepository ruleRepository;
+    private final UserSubjectAssignmentRepository userSubjectAssignmentRepository;
+    private final SubjectProgramEligibilityRepository subjectProgramEligibilityRepository;
+    private final TaskRepository taskRepository;
+    private final MessageRequestQueueRepository messageRequestQueueRepository;
+    private final MessageReceiverRepository messageReceiverRepository;
+    private final OrganisationConfigService organisationConfigService;
+    private final GenderRepository genderRepository;
+    private final OrganisationRepository organisationRepository;
+    private final UserSubjectRepository userSubjectRepository;
     private final Logger logger;
 
     @Autowired
@@ -185,7 +204,18 @@ public class OrganisationService {
                                DocumentationService documentationService,
                                TaskTypeService taskTypeService,
                                TaskStatusService taskStatusService,
-                               EntityTypeRetrieverService entityTypeRetrieverService) {
+                               EntityTypeRetrieverService entityTypeRetrieverService,
+                               RuleDependencyRepository ruleDependencyRepository,
+                               RuleRepository ruleRepository,
+                               UserSubjectAssignmentRepository userSubjectAssignmentRepository,
+                               SubjectProgramEligibilityRepository subjectProgramEligibilityRepository,
+                               TaskRepository taskRepository,
+                               MessageRequestQueueRepository messageRequestQueueRepository,
+                               MessageReceiverRepository messageReceiverRepository,
+                               OrganisationConfigService organisationConfigService,
+                               GenderRepository genderRepository,
+                               OrganisationRepository organisationRepository,
+                               UserSubjectRepository userSubjectRepository) {
         this.formRepository = formRepository;
         this.addressLevelTypeRepository = addressLevelTypeRepository;
         this.locationRepository = locationRepository;
@@ -251,6 +281,17 @@ public class OrganisationService {
         this.taskTypeService = taskTypeService;
         this.taskStatusService = taskStatusService;
         this.entityTypeRetrieverService = entityTypeRetrieverService;
+        this.ruleDependencyRepository = ruleDependencyRepository;
+        this.ruleRepository = ruleRepository;
+        this.userSubjectAssignmentRepository = userSubjectAssignmentRepository;
+        this.subjectProgramEligibilityRepository = subjectProgramEligibilityRepository;
+        this.taskRepository = taskRepository;
+        this.messageRequestQueueRepository = messageRequestQueueRepository;
+        this.messageReceiverRepository = messageReceiverRepository;
+        this.organisationConfigService = organisationConfigService;
+        this.genderRepository = genderRepository;
+        this.organisationRepository = organisationRepository;
+        this.userSubjectRepository = userSubjectRepository;
         logger = LoggerFactory.getLogger(this.getClass());
     }
 
@@ -481,15 +522,29 @@ public class OrganisationService {
         }
     }
 
-    public void addIcons(ZipOutputStream zos) throws IOException {
+    public void addSubjectTypeIcons(ZipOutputStream zos) throws IOException {
         List<SubjectType> subjectTypes = subjectTypeRepository.findAllByIconFileS3KeyNotNull();
         if (subjectTypes.size() > 0) {
-            addDirectoryToZip(zos, "subjectTypeIcons");
+            addDirectoryToZip(zos, BundleFolder.SUBJECT_TYPE_ICONS.getFolderName());
         }
         for (SubjectType subjectType : subjectTypes) {
             InputStream objectContent = s3Service.getObjectContentFromUrl(subjectType.getIconFileS3Key());
             String extension = S.getLastStringAfter(subjectType.getIconFileS3Key(), ".");
-            addIconToZip(zos, String.format("subjectTypeIcons/%s.%s", subjectType.getUuid(), extension), IOUtils.toByteArray(objectContent));
+            addIconToZip(zos, String.format("%s/%s.%s", BundleFolder.SUBJECT_TYPE_ICONS.getFolderName(), subjectType.getUuid(), extension), IOUtils.toByteArray(objectContent));
+        }
+    }
+
+    public void addReportCardIcons(ZipOutputStream zos) throws IOException {
+        List<Card> cards = cardRepository.findAllByIconFileS3KeyNotNull().stream()
+            .filter(card -> !card.getIconFileS3Key().trim().isEmpty()).collect(Collectors.toList());
+        if (cards.size() > 0) {
+            addDirectoryToZip(zos, BundleFolder.REPORT_CARD_ICONS.getFolderName());
+        }
+        for (Card reportCard : cards) {
+            if (StringUtils.isEmpty(reportCard.getIconFileS3Key())) continue;
+            InputStream objectContent = s3Service.getObjectContentFromUrl(reportCard.getIconFileS3Key());
+            String extension = S.getLastStringAfter(reportCard.getIconFileS3Key(), ".");
+            addIconToZip(zos, String.format("%s/%s.%s", BundleFolder.REPORT_CARD_ICONS.getFolderName(), reportCard.getUuid(), extension), IOUtils.toByteArray(objectContent));
         }
     }
 
@@ -535,6 +590,36 @@ public class OrganisationService {
         addFileToZip(zos, "messageRule.json", messagingService.findAll().stream().map(messageRule -> new MessageRuleContract(messageRule, entityTypeRetrieverService)).collect(Collectors.toList()));
     }
 
+    public void addTranslations(Long orgId, ZipOutputStream zos) throws IOException {
+        List<Translation> translations = translationRepository.findAllByOrganisationId(orgId);
+        if (translations.isEmpty()) {
+            return;
+        }
+        addDirectoryToZip(zos, "translations");
+        for (Translation translation : translations) {
+            addFileToZip(zos, String.format("translations/%s.json", translation.getLanguage()), translation.getTranslationJson());
+        }
+    }
+
+    public void addOldRuleDependency(Long orgId, ZipOutputStream zos) throws IOException {
+        RuleDependency ruleDependency = ruleDependencyRepository.findByOrganisationId(orgId);
+        if (ruleDependency == null) {
+            return;
+        }
+        addFileToZip(zos, "ruleDependency.json", RuleDependencyRequest.fromRuleDependency(ruleDependency));
+    }
+
+    public void addOldRules(Long orgId, ZipOutputStream zos) throws IOException {
+        List<Rule> rulesFromDB = ruleRepository.findByOrganisationId(orgId);
+        if (rulesFromDB.isEmpty()) {
+            return;
+        }
+        addDirectoryToZip(zos, "oldRules");
+        for (Rule rule : rulesFromDB) {
+            addFileToZip(zos, String.format("oldRules/%s.json", rule.getUuid()), RuleRequest.fromRule(rule));
+        }
+    }
+
     private void addFileToZip(ZipOutputStream zos, String fileName, File file) throws IOException {
         ZipEntry entry = new ZipEntry(fileName);
         zos.putNextEntry(entry);
@@ -572,25 +657,35 @@ public class OrganisationService {
 
     public void deleteTransactionalData() {
         JpaRepository[] transactionalRepositories = {
-                newsRepository,
-                commentRepository,
-                commentThreadRepository,
-                entityApprovalStatusRepository,
-                ruleFailureTelemetryRepository,
-                identifierAssignmentRepository,
-                syncTelemetryRepository,
-                videoTelemetricRepository,
-                groupSubjectRepository,
-                individualRelationshipRepository,
-                checklistItemRepository,
-                checklistRepository,
-                programEncounterRepository,
-                programEnrolmentRepository,
-                encounterRepository,
-                subjectMigrationRepository,
-                individualRepository
+            newsRepository,
+            commentRepository,
+            commentThreadRepository,
+            entityApprovalStatusRepository,
+            ruleFailureTelemetryRepository,
+            identifierAssignmentRepository,
+            syncTelemetryRepository,
+            videoTelemetricRepository,
+            groupSubjectRepository,
+            individualRelationshipRepository,
+            checklistItemRepository,
+            checklistRepository,
+            programEncounterRepository,
+            programEnrolmentRepository,
+            encounterRepository,
+            subjectMigrationRepository,
+            userSubjectAssignmentRepository,
+            subjectProgramEligibilityRepository,
+            taskRepository,
+            userSubjectRepository,
+            individualRepository
         };
 
+        CrudRepository[] txCrudRepositories = {
+            messageReceiverRepository,
+            messageRequestQueueRepository,
+        };
+
+        Arrays.asList(txCrudRepositories).forEach(this::deleteAll);
         Arrays.asList(transactionalRepositories).forEach(this::deleteAll);
     }
 
@@ -625,23 +720,70 @@ public class OrganisationService {
                 dashboardSectionRepository,
                 groupDashboardRepository,
                 dashboardRepository,
-                msg91ConfigRepository
+                msg91ConfigRepository,
+                genderRepository,
+                userGroupRepository,
+                groupRepository
         };
 
         Arrays.asList(metadataRepositories).forEach(this::deleteAll);
-        userGroupRepository.deleteAllByGroupIsNotIn(groupRepository.findAllByName(Group.Everyone));
-        groupRepository.deleteAllByNameNot(Group.Everyone);
     }
 
     private void deleteAll(JpaRepository repository) {
         repository.deleteAllInBatch();
     }
-
+    private void deleteAll(CrudRepository repository) {
+        repository.deleteAll();
+    }
     public void deleteMediaContent(boolean deleteMetadata) {
         try {
             s3Service.deleteOrgMedia(deleteMetadata);
         } catch (Exception e) {
             logger.info("Error while deleting the media files, skipping.");
         }
+    }
+
+    public void addGroupDashboardJson(ZipOutputStream zos) throws IOException {
+        List<GroupDashboardBundleContract> groupDashboards = groupDashboardRepository.findAll().stream()
+                .map(GroupDashboardBundleContract::fromEntity).collect(Collectors.toList());
+        if (!groupDashboards.isEmpty()) {
+            addFileToZip(zos, "groupDashboards.json", groupDashboards);
+        }
+    }
+
+    private void createGender(String genderName, Organisation org) {
+        Gender gender = new Gender();
+        gender.setName(genderName);
+        gender.assignUUID();
+        gender.setOrganisationId(org.getId());
+        genderRepository.save(gender);
+    }
+
+    private void addDefaultGroup(Long organisationId, String groupType) {
+        Group group = new Group();
+        group.setName(groupType);
+        group.setOrganisationId(organisationId);
+        group.setUuid(UUID.randomUUID().toString());
+        group.setHasAllPrivileges(group.isAdministrator());
+        group.setVersion(0);
+        groupRepository.save(group);
+    }
+
+    private void createDefaultGenders(Organisation org) {
+        createGender("Male", org);
+        createGender("Female", org);
+        createGender("Other", org);
+    }
+
+    public void setupBaseOrganisationData(Organisation organisation) {
+        createDefaultGenders(organisation);
+        addDefaultGroup(organisation.getId(), Group.Everyone);
+        addDefaultGroup(organisation.getId(), Group.Administrators);
+        organisationConfigService.createDefaultOrganisationConfig(organisation);
+    }
+
+    public Organisation getCurrentOrganisation() {
+        Long organisationId = UserContextHolder.getUserContext().getOrganisationId();
+        return organisationRepository.findOne(organisationId);
     }
 }

@@ -1,6 +1,8 @@
 package org.avni.server.service;
 
 import org.avni.server.application.Subject;
+import org.avni.server.application.SubjectTypeSettingKey;
+import org.avni.server.dao.AddressLevelTypeRepository;
 import org.avni.server.dao.AvniJobRepository;
 import org.avni.server.dao.OperationalSubjectTypeRepository;
 import org.avni.server.dao.SubjectTypeRepository;
@@ -9,13 +11,11 @@ import org.avni.server.framework.security.UserContextHolder;
 import org.avni.server.web.request.OperationalSubjectTypeContract;
 import org.avni.server.web.request.SubjectTypeContract;
 import org.avni.server.web.request.syncAttribute.UserSyncAttributeAssignmentRequest;
+import org.avni.server.web.request.webapp.SubjectTypeSetting;
 import org.joda.time.DateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.batch.core.Job;
-import org.springframework.batch.core.JobParameters;
-import org.springframework.batch.core.JobParametersBuilder;
-import org.springframework.batch.core.JobParametersInvalidException;
+import org.springframework.batch.core.*;
 import org.springframework.batch.core.launch.JobLauncher;
 import org.springframework.batch.core.repository.JobExecutionAlreadyRunningException;
 import org.springframework.batch.core.repository.JobInstanceAlreadyCompleteException;
@@ -23,6 +23,7 @@ import org.springframework.batch.core.repository.JobRestartException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import javax.transaction.Transactional;
 import java.util.*;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -30,35 +31,46 @@ import java.util.stream.Stream;
 
 @Service
 public class SubjectTypeService implements NonScopeAwareService {
-
     private final Logger logger;
     private final OperationalSubjectTypeRepository operationalSubjectTypeRepository;
-    private SubjectTypeRepository subjectTypeRepository;
-    private Job syncAttributesJob;
-    private JobLauncher syncAttributesJobLauncher;
-    private AvniJobRepository avniJobRepository;
+    private final SubjectTypeRepository subjectTypeRepository;
+    private final Job syncAttributesJob;
+    private final JobLauncher syncAttributesJobLauncher;
+    private final AvniJobRepository avniJobRepository;
+    private final Job userSubjectTypeCreateJob;
+    private final JobLauncher userSubjectTypeCreateJobLauncher;
     private final ConceptService conceptService;
+    private final OrganisationConfigService organisationConfigService;
+    private final AddressLevelTypeRepository addressLevelTypeRepository;
 
     @Autowired
     public SubjectTypeService(SubjectTypeRepository subjectTypeRepository,
                               OperationalSubjectTypeRepository operationalSubjectTypeRepository,
                               Job syncAttributesJob,
                               JobLauncher syncAttributesJobLauncher,
+                              Job userSubjectTypeCreateJob,
+                              JobLauncher userSubjectTypeCreateJobLauncher,
                               AvniJobRepository avniJobRepository,
-                              ConceptService conceptService) {
+                              ConceptService conceptService, OrganisationConfigService organisationConfigService,
+                              AddressLevelTypeRepository addressLevelTypeRepository) {
         this.subjectTypeRepository = subjectTypeRepository;
         this.operationalSubjectTypeRepository = operationalSubjectTypeRepository;
         this.syncAttributesJob = syncAttributesJob;
         this.syncAttributesJobLauncher = syncAttributesJobLauncher;
+        this.userSubjectTypeCreateJob = userSubjectTypeCreateJob;
+        this.userSubjectTypeCreateJobLauncher = userSubjectTypeCreateJobLauncher;
         this.avniJobRepository = avniJobRepository;
         this.conceptService = conceptService;
+        this.organisationConfigService = organisationConfigService;
+        this.addressLevelTypeRepository = addressLevelTypeRepository;
         logger = LoggerFactory.getLogger(this.getClass());
     }
 
-    public void saveSubjectType(SubjectTypeContract subjectTypeRequest) {
+    public SubjectTypeUpsertResponse saveSubjectType(SubjectTypeContract subjectTypeRequest) {
         logger.info(String.format("Creating subjectType: %s", subjectTypeRequest.toString()));
         SubjectType subjectType = subjectTypeRepository.findByUuid(subjectTypeRequest.getUuid());
-        if (subjectType == null) {
+        boolean isSubjectTypeNotPresentInDB = (subjectType == null);
+        if (isSubjectTypeNotPresentInDB) {
             subjectType = new SubjectType();
         }
         subjectType.setUuid(subjectTypeRequest.getUuid());
@@ -85,7 +97,9 @@ public class SubjectTypeService implements NonScopeAwareService {
         subjectType.setSyncRegistrationConcept2(subjectTypeRequest.getSyncRegistrationConcept2());
         subjectType.setSyncRegistrationConcept2Usable(subjectTypeRequest.getSyncRegistrationConcept2Usable());
         subjectType.setNameHelpText(subjectTypeRequest.getNameHelpText());
-        subjectTypeRepository.save(subjectType);
+        subjectType.setSettings(subjectTypeRequest.getSettings() != null ? subjectTypeRequest.getSettings() : getDefaultSettings());
+        subjectType = subjectTypeRepository.save(subjectType);
+        return new SubjectTypeUpsertResponse(isSubjectTypeNotPresentInDB, subjectType);
     }
 
     public void createOperationalSubjectType(OperationalSubjectTypeContract operationalSubjectTypeContract, Organisation organisation) {
@@ -169,8 +183,26 @@ public class SubjectTypeService implements NonScopeAwareService {
             try {
                 syncAttributesJobLauncher.run(syncAttributesJob, jobParameters);
             } catch (JobParametersInvalidException | JobExecutionAlreadyRunningException | JobInstanceAlreadyCompleteException | JobRestartException e) {
-                throw new RuntimeException(String.format("Error while starting the sync attribute job, %s", e.getMessage()));
+                throw new RuntimeException(String.format("Error while starting the sync attribute job, %s", e.getMessage()), e);
             }
+        }
+    }
+
+    @Transactional(Transactional.TxType.NOT_SUPPORTED)
+    public void
+    launchUserSubjectTypeJob(SubjectType subjectType) {
+        String jobUUID = UUID.randomUUID().toString();
+        UserContext userContext = UserContextHolder.getUserContext();
+        JobParameters jobParameters = new JobParametersBuilder()
+                .addString("uuid", jobUUID)
+                .addString("organisationUUID", userContext.getOrganisationUUID())
+                .addLong("userId", userContext.getUser().getId())
+                .addLong("subjectTypeId", subjectType.getId())
+                .toJobParameters();
+        try {
+            userSubjectTypeCreateJobLauncher.run(userSubjectTypeCreateJob, jobParameters);
+        } catch (JobParametersInvalidException | JobExecutionAlreadyRunningException | JobInstanceAlreadyCompleteException | JobRestartException e) {
+            throw new RuntimeException(String.format("Error while starting user subject type create job, %s", e.getMessage()), e);
         }
     }
 
@@ -193,7 +225,48 @@ public class SubjectTypeService implements NonScopeAwareService {
 
         return Arrays.stream(syncAttributes).
                 filter(Objects::nonNull).
-                map(sa -> String.format("%s->%s", subjectTypeWithSyncAttribute.getName(),conceptService.get(sa).getName())).
+                map(sa -> String.format("%s->%s", subjectTypeWithSyncAttribute.getName(), conceptService.get(sa).getName())).
                 collect(Collectors.toList());
+    }
+
+    public JsonObject getDefaultSettings() {
+        JsonObject defaultSettings = new JsonObject();
+        defaultSettings.put(String.valueOf(SubjectTypeSettingKey.displayPlannedEncounters), true);
+        defaultSettings.put(String.valueOf(SubjectTypeSettingKey.displayRegistrationDetails), true);
+        return defaultSettings;
+    }
+
+    public AddressLevelTypes getRegistrableLocationTypes(SubjectType subjectType) {
+        OrganisationConfig organisationConfig = this.organisationConfigService.getCurrentOrganisationConfig();
+        SubjectTypeSetting registrationSetting = organisationConfig.getRegistrationSetting(subjectType);
+        AddressLevelTypes locationTypes = addressLevelTypeRepository.getAllAddressLevelTypes();
+        if (locationTypes.isEmpty()) {
+            throw new RuntimeException("No address level types found");
+        }
+
+        if (registrationSetting == null) {
+            return new AddressLevelTypes(locationTypes);
+        } else {
+            return registrationSetting.getAddressLevelTypes(locationTypes);
+        }
+    }
+
+
+    public class SubjectTypeUpsertResponse {
+        boolean isSubjectTypeNotPresentInDB;
+        SubjectType subjectType;
+
+        public SubjectTypeUpsertResponse(boolean isSubjectTypeNotPresentInDB, SubjectType subjectType) {
+            this.isSubjectTypeNotPresentInDB = isSubjectTypeNotPresentInDB;
+            this.subjectType = subjectType;
+        }
+
+        public boolean isSubjectTypeNotPresentInDB() {
+            return isSubjectTypeNotPresentInDB;
+        }
+
+        public SubjectType getSubjectType() {
+            return subjectType;
+        }
     }
 }

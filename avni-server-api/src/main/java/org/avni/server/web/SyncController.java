@@ -56,13 +56,11 @@ public class SyncController {
     private final FormMappingService formMappingService;
     private final EncounterTypeService encounterTypeService;
     private final ProgramService programService;
-    private final ProgramOutcomeService programOutcomeService;
     private final GenderService genderService;
     private final IndividualRelationService individualRelationService;
     private final IndividualRelationGenderMappingService individualRelationGenderMappingService;
     private final IndividualRelationshipTypeService individualRelationshipTypeService;
     private final ConceptService conceptService;
-    private final ProgramConfigService programConfigService;
     private final VideoService videoService;
     private final SubjectTypeService subjectTypeService;
     private final ChecklistItemDetailService checklistItemDetailService;
@@ -115,11 +113,11 @@ public class SyncController {
                           LocationMappingService locationMappingService, IdentifierAssignmentService identifierAssignmentService, ChecklistDetailService checklistDetailService,
                           RuleService ruleService, RuleDependencyService ruleDependencyService, FormService formService,
                           FormMappingService formMappingService, EncounterTypeService encounterTypeService,
-                          ProgramService programService, ProgramOutcomeService programOutcomeService,
+                          ProgramService programService,
                           GenderService genderService, IndividualRelationService individualRelationService,
                           IndividualRelationGenderMappingService individualRelationGenderMappingService,
                           IndividualRelationshipTypeService individualRelationshipTypeService, ConceptService conceptService,
-                          ProgramConfigService programConfigService, VideoService videoService,
+                          VideoService videoService,
                           SubjectTypeService subjectTypeService, ChecklistItemDetailService checklistItemDetailService,
                           FormElementGroupService formElementGroupService, FormElementService formElementService,
                           ConceptAnswerService conceptAnswerService, IdentifierSourceService identifierSourceService,
@@ -158,13 +156,11 @@ public class SyncController {
         this.formMappingService = formMappingService;
         this.encounterTypeService = encounterTypeService;
         this.programService = programService;
-        this.programOutcomeService = programOutcomeService;
         this.genderService = genderService;
         this.individualRelationService = individualRelationService;
         this.individualRelationGenderMappingService = individualRelationGenderMappingService;
         this.individualRelationshipTypeService = individualRelationshipTypeService;
         this.conceptService = conceptService;
-        this.programConfigService = programConfigService;
         this.videoService = videoService;
         this.subjectTypeService = subjectTypeService;
         this.checklistItemDetailService = checklistItemDetailService;
@@ -245,13 +241,11 @@ public class SyncController {
         nonScopeAwareServiceMap.put(FormMapping, formMappingService);
         nonScopeAwareServiceMap.put(EncounterType, encounterTypeService);
         nonScopeAwareServiceMap.put(Program, programService);
-        nonScopeAwareServiceMap.put(ProgramOutcome, programOutcomeService);
         nonScopeAwareServiceMap.put(Gender, genderService);
         nonScopeAwareServiceMap.put(IndividualRelation, individualRelationService);
         nonScopeAwareServiceMap.put(IndividualRelationGenderMapping, individualRelationGenderMappingService);
         nonScopeAwareServiceMap.put(IndividualRelationshipType, individualRelationshipTypeService);
         nonScopeAwareServiceMap.put(Concept, conceptService);
-        nonScopeAwareServiceMap.put(ProgramConfig, programConfigService);
         nonScopeAwareServiceMap.put(Video, videoService);
         nonScopeAwareServiceMap.put(SubjectType, subjectTypeService);
         nonScopeAwareServiceMap.put(ChecklistItemDetail, checklistItemDetailService);
@@ -297,10 +291,11 @@ public class SyncController {
     @PostMapping(value = "/v2/syncDetails")
     @PreAuthorize(value = "hasAnyAuthority('user')")
     public ResponseEntity<?> getSyncDetailsWithScopeAwareEAS(@RequestBody List<EntitySyncStatusContract> entitySyncStatusContracts,
-                                                             @RequestParam(value = "isStockApp", required = false) boolean isStockApp) {
+                                                             @RequestParam(value = "isStockApp", required = false) boolean isStockApp,
+                                                             @RequestParam(value = "includeUserSubjectType", required = false, defaultValue = "false") boolean includeUserSubjectType) {
         DateTime now = new DateTime();
         DateTime nowMinus10Seconds = getNowMinus10Seconds();
-        Set<SyncableItem> allSyncableItems = syncDetailService.getAllSyncableItems(true);
+        Set<SyncableItem> allSyncableItems = syncDetailService.getAllSyncableItems(true, includeUserSubjectType);
         long afterSyncDetailsService = new DateTime().getMillis();
         logger.info(String.format("Time taken for syncDetailsService %d", afterSyncDetailsService - now.getMillis()));
         List<EntitySyncStatusContract> changedEntities = getChangedEntities(entitySyncStatusContracts, allSyncableItems, true);
@@ -321,10 +316,11 @@ public class SyncController {
     @PostMapping(value = "/syncDetails")
     @PreAuthorize(value = "hasAnyAuthority('user')")
     public ResponseEntity<?> getSyncDetails(@RequestBody List<EntitySyncStatusContract> entitySyncStatusContracts,
-                                            @RequestParam(value = "isStockApp", required = false) boolean isStockApp) {
+                                            @RequestParam(value = "isStockApp", required = false) boolean isStockApp,
+                                            @RequestParam(value = "includeUserSubjectType", required = false, defaultValue = "false") boolean includeUserSubjectType) {
         DateTime now = new DateTime();
         DateTime nowMinus10Seconds = getNowMinus10Seconds();
-        Set<SyncableItem> allSyncableItems = syncDetailService.getAllSyncableItems(false);
+        Set<SyncableItem> allSyncableItems = syncDetailService.getAllSyncableItems(false, includeUserSubjectType);
         long afterSyncDetailsService = new DateTime().getMillis();
         logger.info(String.format("Time taken for syncDetailsService %d", afterSyncDetailsService - now.getMillis()));
         List<EntitySyncStatusContract> changedEntities = getChangedEntities(entitySyncStatusContracts, allSyncableItems, false);

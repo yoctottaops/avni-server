@@ -2,17 +2,19 @@ package org.avni.server.domain;
 
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.core.type.TypeReference;
+import org.avni.server.application.KeyType;
 import org.avni.server.application.OrganisationConfigSettingKey;
 import org.avni.server.domain.framework.BaseJsonObject;
+import org.avni.server.util.ObjectMapperSingleton;
+import org.avni.server.web.request.webapp.SubjectTypeSetting;
 import org.hibernate.annotations.BatchSize;
 import org.hibernate.annotations.Type;
 
 import javax.persistence.Column;
 import javax.persistence.Entity;
 import javax.persistence.Table;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Entity
@@ -73,6 +75,15 @@ public class OrganisationConfig extends OrganisationAwareEntity {
         return (Boolean) getSettings().getOrDefault(feature, false);
     }
 
+    @JsonIgnore
+    public List<SubjectTypeSetting> getCustomRegistrationLocations() {
+        return ObjectMapperSingleton.getObjectMapper().convertValue(this.getSettings().getOrDefault(KeyType.customRegistrationLocations.toString(), Collections.EMPTY_LIST), new TypeReference<List<SubjectTypeSetting>>() {});
+    }
+
+    public SubjectTypeSetting getRegistrationSetting(SubjectType subjectType) {
+        return this.getCustomRegistrationLocations().stream().filter(subjectTypeSetting -> subjectTypeSetting.getSubjectTypeUUID().equals(subjectType.getUuid())).findFirst().orElse(null);
+    }
+
     public class Settings {
         private final JsonObject settings;
 
@@ -92,6 +103,16 @@ public class OrganisationConfig extends OrganisationAwareEntity {
             if (value instanceof Boolean)
                 return Boolean.parseBoolean(value.toString());
             return false;
+        }
+
+        public Set<String> getSupportedLanguages() {
+            if(settings.get("languages") == null
+                    || !(settings.get("languages") instanceof Collection)
+                    || ((Collection) settings.get("languages")).size() == 0) {
+                return Collections.emptySet();
+            }
+            List<String> allSupportedLanguages = (List<String>) settings.get("languages");
+            return new HashSet<>(allSupportedLanguages);
         }
     }
 

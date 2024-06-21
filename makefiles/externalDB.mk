@@ -82,6 +82,8 @@ tunnel-prerelease-db:
 	make tunnel-db host=avni-prerelease dbServer=prereleasedb.avniproject.org
 tunnel-prod-read-db:
 	make tunnel-db host=avni-prod dbServer=serverdb.read.openchs.org
+tunnel-metabase:
+	make tunnel-db host=avni-metabase dbServer=reportingdb.cnwnxgm8rsnb.ap-south-1.rds.amazonaws.com
 tunnel-prod-db:
 	make tunnel-db host=avni-prod dbServer=serverdb.openchs.org
 tunnel-lfe-prod-db:
@@ -93,10 +95,32 @@ tunnel-rwb-prod:
 
 dump-org-data-prerelease:
 	make dump-org-data dbRole=$(dbRole) prefix=prerelease
+dump-org-data-prerelease-with-copy:
+	make dump-org-data-with-copy dbRole=$(dbRole) prefix=prerelease
 dump-org-data-prod:
 	make dump-org-data dbRole=$(dbRole) prefix=prod
+dump-org-data-prod-with-copy:
+	make dump-org-data-with-copy dbRole=$(dbRole) prefix=prod
 dump-org-data-staging:
 	make dump-org-data dbRole=$(dbRole) prefix=staging
+
+dump-org-data-with-copy:
+ifndef dbRole
+	@echo "Provde the dbRole variable"
+	exit 1
+endif
+	pg_dump -h localhost -p 5433 \
+		--dbname=openchs \
+		--username=openchs \
+		--role=$(dbRole) \
+		--file=$(HOME)/projects/avni/avni-db-dumps/$(prefix)-$(dbRole).sql \
+		--enable-row-security --verbose --schema=public --host=localhost \
+		--exclude-table-data=audit \
+		--exclude-table-data='public.sync_telemetry' \
+		--exclude-table-data='rule_failure_log' \
+		--exclude-table-data='scheduled_job_run' \
+		--exclude-table-data='qrtz_*' \
+		--exclude-table-data='batch_*' \
 
 dump-org-data:
 ifndef dbRole
@@ -115,7 +139,68 @@ endif
 		--exclude-table-data='scheduled_job_run' \
 		--exclude-table-data='qrtz_*' \
 		--exclude-table-data='batch_*' \
-		--exclude-table-data='public.individual_copy' \
-		--exclude-table-data='public.program_enrolment_copy' \
-		--exclude-table-data='public.encounter_copy' \
-		--exclude-table-data='public.program_encounter_copy'
+		--exclude-table='public.individual_copy' \
+		--exclude-table='public.program_enrolment_copy' \
+		--exclude-table='public.encounter_copy' \
+		--exclude-table='public.program_encounter_copy' \
+		--exclude-table='public.individual_copy_ck' \
+		--exclude-table='public.program_enrolment_ck' \
+		--exclude-table='public.encounter_ck' \
+		--exclude-table='public.program_encounter_ck' \
+		--exclude-table='public.individual_copy_ihmp' \
+		--exclude-table='public.program_enrolment_ihmp' \
+		--exclude-table='public.individual_02_24' \
+		--exclude-table='public.program_enrolment_02_24'
+
+dump-org-data-without-etl:
+ifndef dbRole
+	@echo "Provde the dbRole variable"
+	exit 1
+endif
+	pg_dump -h localhost -p 5433 \
+		--dbname=openchs \
+		--username=openchs \
+		--role=$(dbRole) \
+		--file=$(HOME)/projects/avni/avni-db-dumps/$(prefix)-$(dbRole).sql \
+		--enable-row-security --verbose --schema=public --host=localhost \
+		--exclude-table-data=audit \
+		--exclude-table-data='public.sync_telemetry' \
+		--exclude-table-data='rule_failure_log' \
+		--exclude-table='qrtz_*' \
+		--exclude-table-data='batch_*' \
+		--exclude-table='public.individual_copy' \
+		--exclude-table='public.program_enrolment_copy' \
+		--exclude-table='public.encounter_copy' \
+		--exclude-table='public.program_encounter_copy' \
+		--exclude-table='public.individual_copy_ck' \
+		--exclude-table='public.program_enrolment_ck' \
+		--exclude-table='public.encounter_ck' \
+		--exclude-table='public.program_encounter_ck' \
+		--exclude-table='public.individual_copy_ihmp' \
+		--exclude-table='public.program_enrolment_ihmp' \
+		--exclude-table='public.individual_02_24' \
+		--exclude-table='public.program_enrolment_02_24' \
+		--exclude-table='public.scheduled_job_run*'
+
+dump-metabase-prod:
+	pg_dump -h localhost -p 5433 \
+		--dbname=reportingdb \
+		--username=reporting_user \
+		--file=$(HOME)/projects/avni/avni-db-dumps/avni-metabase.sql \
+		--verbose --schema=public --host=localhost \
+		--exclude-table='public.query_execution' \
+		--exclude-table='public.view_log'
+
+restore-metabase-dump:
+ifndef dumpFile
+	@echo "Provde the dumpFile variable"
+	exit 1
+else
+	make _clean_db database=avni_metabase
+	-psql -p $(dbPort) -U ${su} -d postgres -c "create user reporting_user with password 'password' createrole";
+	-psql -p $(dbPort) -U ${su} -d postgres -c 'create database avni_metabase with owner reporting_user';
+	-psql -p $(dbPort) -U ${su} -d avni_metabase -c 'create extension if not exists "uuid-ossp"';
+	-psql -p $(dbPort) -U ${su} -d avni_metabase -c 'create extension if not exists "ltree"';
+	-psql -p $(dbPort) -U ${su} -d avni_metabase -c 'create extension if not exists "hstore"';
+	psql -U reporting_user -d avni_metabase < $(dumpFile)
+endif

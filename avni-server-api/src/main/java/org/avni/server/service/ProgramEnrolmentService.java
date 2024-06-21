@@ -1,5 +1,6 @@
 package org.avni.server.service;
 
+import com.bugsnag.Bugsnag;
 import org.avni.messaging.domain.EntityType;
 import org.avni.server.application.FormMapping;
 import org.avni.server.application.FormType;
@@ -7,6 +8,7 @@ import org.avni.server.common.EntityHelper;
 import org.avni.server.common.Messageable;
 import org.avni.server.dao.*;
 import org.avni.server.domain.*;
+import org.avni.server.framework.security.UserContextHolder;
 import org.avni.server.geo.Point;
 import org.avni.server.service.accessControl.AccessControlService;
 import org.avni.server.util.BadRequestError;
@@ -42,13 +44,13 @@ public class ProgramEnrolmentService implements ScopeAwareService<ProgramEnrolme
     private final ProgramRepository programRepository;
     private final ObservationService observationService;
     private final IndividualRepository individualRepository;
-    private final ProgramOutcomeRepository programOutcomeRepository;
     private final ChecklistDetailRepository checklistDetailRepository;
     private final ChecklistItemDetailRepository checklistItemDetailRepository;
     private final ChecklistRepository checklistRepository;
     private final ChecklistItemRepository checklistItemRepository;
     private final IdentifierAssignmentRepository identifierAssignmentRepository;
     private final AccessControlService accessControlService;
+    private final Bugsnag bugsnag;
     private final FormMappingService formMappingService;
 
     @Autowired
@@ -58,21 +60,20 @@ public class ProgramEnrolmentService implements ScopeAwareService<ProgramEnrolme
                                    ProgramRepository programRepository,
                                    ObservationService observationService,
                                    IndividualRepository individualRepository,
-                                   ProgramOutcomeRepository programOutcomeRepository,
                                    ChecklistDetailRepository checklistDetailRepository,
                                    ChecklistItemDetailRepository checklistItemDetailRepository,
                                    ChecklistRepository checklistRepository,
                                    ChecklistItemRepository checklistItemRepository,
                                    IdentifierAssignmentRepository identifierAssignmentRepository,
                                    AccessControlService accessControlService,
-                                   FormMappingService formMappingService) {
+                                   FormMappingService formMappingService,
+                                   Bugsnag bugsnag) {
         this.programEnrolmentRepository = programEnrolmentRepository;
         this.programEncounterService = programEncounterService;
         this.programEncounterRepository = programEncounterRepository;
         this.programRepository = programRepository;
         this.observationService = observationService;
         this.individualRepository = individualRepository;
-        this.programOutcomeRepository = programOutcomeRepository;
         this.checklistDetailRepository = checklistDetailRepository;
         this.checklistItemDetailRepository = checklistItemDetailRepository;
         this.checklistRepository = checklistRepository;
@@ -80,6 +81,7 @@ public class ProgramEnrolmentService implements ScopeAwareService<ProgramEnrolme
         this.identifierAssignmentRepository = identifierAssignmentRepository;
         this.formMappingService = formMappingService;
         this.accessControlService = accessControlService;
+        this.bugsnag = bugsnag;
     }
 
     @Transactional
@@ -150,10 +152,8 @@ public class ProgramEnrolmentService implements ScopeAwareService<ProgramEnrolme
         }
         Decisions decisions = request.getDecisions();
         observationService.validateObservationsAndDecisions(request.getObservations(), decisions != null ? decisions.getEnrolmentDecisions() : null, formMappingService.find(program, FormType.ProgramEnrolment));
-        ProgramOutcome programOutcome = programOutcomeRepository.findByUuid(request.getProgramOutcomeUUID());
         ProgramEnrolment programEnrolment = EntityHelper.newOrExistingEntity(programEnrolmentRepository, request, new ProgramEnrolment());
         programEnrolment.setProgram(program);
-        programEnrolment.setProgramOutcome(programOutcome);
         programEnrolment.setEnrolmentDateTime(request.getEnrolmentDateTime());
         programEnrolment.setProgramExitDateTime(request.getProgramExitDateTime());
         PointRequest enrolmentLocation = request.getEnrolmentLocation();
@@ -162,8 +162,25 @@ public class ProgramEnrolmentService implements ScopeAwareService<ProgramEnrolme
         PointRequest exitLocation = request.getExitLocation();
         if (exitLocation != null)
             programEnrolment.setExitLocation(new Point(exitLocation.getX(), exitLocation.getY()));
-        programEnrolment.setObservations(observationService.createObservations(request.getObservations()));
-        programEnrolment.setProgramExitObservations(observationService.createObservations(request.getProgramExitObservations()));
+
+        // Temporary fix to
+        if ((request.getObservations() == null || request.getObservations().isEmpty()) && programEnrolment.getObservations() != null && !programEnrolment.getObservations().isEmpty()) {
+            String errorMessage = String.format("ProgramEnrolment Observations not all allowed to be made empty. User: %s, UUID: %s, ", UserContextHolder.getUser().getUsername(), request.getUuid());
+            bugsnag.notify(new Exception(errorMessage));
+            logger.error(errorMessage);
+            programEnrolment.updateAudit();
+        } else {
+            programEnrolment.setObservations(observationService.createObservations(request.getObservations()));
+        }
+
+        if ((request.getProgramExitObservations() == null || request.getProgramExitObservations().isEmpty()) && programEnrolment.getProgramExitObservations() != null && !programEnrolment.getProgramExitObservations().isEmpty()) {
+            String errorMessage = String.format("ProgramEnrolment Exit Observations not all allowed to be made empty. User: %s, UUID: %s, ", UserContextHolder.getUser().getUsername(), request.getUuid());
+            bugsnag.notify(new Exception(errorMessage));
+            logger.error(errorMessage);
+            programEnrolment.updateAudit();
+        } else {
+            programEnrolment.setProgramExitObservations(observationService.createObservations(request.getProgramExitObservations()));
+        }
 
         Individual individual = individualRepository.findByUuid(request.getIndividualUUID());
 

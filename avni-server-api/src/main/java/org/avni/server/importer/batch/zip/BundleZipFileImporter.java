@@ -4,22 +4,25 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.avni.messaging.contract.MessageRuleContract;
 import org.avni.messaging.domain.MessageRule;
 import org.avni.messaging.service.MessagingService;
+import org.avni.server.application.Subject;
 import org.avni.server.application.menu.MenuItem;
 import org.avni.server.builder.BuilderException;
 import org.avni.server.builder.FormBuilderException;
+import org.avni.server.dao.CardRepository;
 import org.avni.server.dao.SubjectTypeRepository;
-import org.avni.server.domain.Organisation;
-import org.avni.server.domain.OrganisationConfig;
-import org.avni.server.domain.SubjectType;
+import org.avni.server.domain.*;
+import org.avni.server.domain.Locale;
 import org.avni.server.framework.security.AuthService;
 import org.avni.server.framework.security.UserContextHolder;
 import org.avni.server.importer.batch.model.BundleFile;
+import org.avni.server.importer.batch.model.BundleFolder;
 import org.avni.server.importer.batch.model.BundleZip;
 import org.avni.server.service.*;
 import org.avni.server.service.accessControl.GroupPrivilegeService;
-import org.avni.server.web.request.*;
 import org.avni.server.service.application.MenuItemService;
 import org.avni.server.util.ObjectMapperSingleton;
+import org.avni.server.web.contract.GroupDashboardBundleContract;
+import org.avni.server.web.request.*;
 import org.avni.server.web.request.application.ChecklistDetailRequest;
 import org.avni.server.web.request.application.FormContract;
 import org.avni.server.web.request.application.menu.MenuItemContract;
@@ -39,9 +42,7 @@ import org.springframework.stereotype.Component;
 import javax.annotation.PostConstruct;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 
 import static java.lang.String.format;
@@ -51,7 +52,7 @@ import static java.lang.String.format;
 public class BundleZipFileImporter implements ItemWriter<BundleFile> {
     private static final Logger logger = LoggerFactory.getLogger(BundleZipFileImporter.class);
 
-    private static final String SUBJECT_ICON_DIRECTORY = "subjectTypeIcons";
+    private static final char SEPARATOR_FOR_EXTENSION = '.';
     private final AuthService authService;
     private final EncounterTypeService encounterTypeService;
     private final FormMappingService formMappingService;
@@ -71,6 +72,7 @@ public class BundleZipFileImporter implements ItemWriter<BundleFile> {
     private final GroupsService groupsService;
     private final GroupRoleService groupRoleService;
     private final SubjectTypeRepository subjectTypeRepository;
+    private final CardRepository cardRepository;
     private final GroupPrivilegeService groupPrivilegeService;
     private final VideoService videoService;
     private final CardService cardService;
@@ -82,11 +84,23 @@ public class BundleZipFileImporter implements ItemWriter<BundleFile> {
     private final MenuItemService menuItemService;
     private final EntityTypeRetrieverService entityTypeRetrieverService;
     private final MessagingService messagingService;
+    private final RuleDependencyService ruleDependencyService;
+    private final TranslationService translationService;
+    private final RuleService ruleService;
+    private final GroupDashboardService groupDashboardService;
+
     @Value("#{jobParameters['userId']}")
     private Long userId;
     @Value("#{jobParameters['organisationUUID']}")
     private String organisationUUID;
 
+    /**
+     * IMPORTANT: The un-tampered bundle is processed in the order of files inserted while generating the bundle,
+     * which is as per code in ImplementationController.export().
+     *
+     * Always ensure that bundle is created with content in the same sequence that you want it to be processed during upload.
+     * DISCLAIMER: If the bundle is tampered, for example to remove any forms or concepts, then the sequence of processing of bundle files is unknown
+     */
     private final List<String> fileSequence = new ArrayList<String>() {{
         add("organisationConfig.json");
         add("addressLevelTypes.json");
@@ -100,7 +114,7 @@ public class BundleZipFileImporter implements ItemWriter<BundleFile> {
         add("operationalEncounterTypes.json");
         add("documentations.json");
         add("concepts.json");
-        add("forms");
+        add(BundleFolder.FORMS.getFolderName());
         add("formMappings.json");
         add("individualRelation.json");
         add("relationshipType.json");
@@ -112,10 +126,16 @@ public class BundleZipFileImporter implements ItemWriter<BundleFile> {
         add("video.json");
         add("reportCard.json");
         add("reportDashboard.json");
+        add("groupDashboards.json");
         add("taskType.json");
         add("taskStatus.json");
         add("menuItem.json");
         add("messageRule.json");
+        add(BundleFolder.TRANSLATIONS.getFolderName());
+        add("ruleDependency.json");
+        add(BundleFolder.OLD_RULES.getFolderName());
+        add(BundleFolder.SUBJECT_TYPE_ICONS.getFolderName());
+        add(BundleFolder.REPORT_CARD_ICONS.getFolderName());
     }};
 
 
@@ -137,6 +157,7 @@ public class BundleZipFileImporter implements ItemWriter<BundleFile> {
                                  GroupsService groupsService,
                                  GroupRoleService groupRoleService,
                                  SubjectTypeRepository subjectTypeRepository,
+                                 CardRepository cardRepository,
                                  GroupPrivilegeService groupPrivilegeService,
                                  VideoService videoService,
                                  CardService cardService,
@@ -146,7 +167,10 @@ public class BundleZipFileImporter implements ItemWriter<BundleFile> {
                                  TaskStatusService taskStatusService,
                                  MenuItemService menuItemService,
                                  EntityTypeRetrieverService entityTypeRetrieverService,
-                                 MessagingService messagingService) {
+                                 MessagingService messagingService,
+                                 RuleDependencyService ruleDependencyService,
+                                 TranslationService translationService,
+                                 RuleService ruleService, GroupDashboardService groupDashboardService) {
         this.authService = authService;
         this.conceptService = conceptService;
         this.formService = formService;
@@ -164,6 +188,7 @@ public class BundleZipFileImporter implements ItemWriter<BundleFile> {
         this.groupsService = groupsService;
         this.groupRoleService = groupRoleService;
         this.subjectTypeRepository = subjectTypeRepository;
+        this.cardRepository = cardRepository;
         this.groupPrivilegeService = groupPrivilegeService;
         this.videoService = videoService;
         this.cardService = cardService;
@@ -175,6 +200,10 @@ public class BundleZipFileImporter implements ItemWriter<BundleFile> {
         this.menuItemService = menuItemService;
         this.entityTypeRetrieverService = entityTypeRetrieverService;
         this.messagingService = messagingService;
+        this.ruleDependencyService = ruleDependencyService;
+        this.translationService = translationService;
+        this.ruleService = ruleService;
+        this.groupDashboardService = groupDashboardService;
         objectMapper = ObjectMapperSingleton.getObjectMapper();
     }
 
@@ -186,15 +215,12 @@ public class BundleZipFileImporter implements ItemWriter<BundleFile> {
     @Override
     public void write(List<? extends BundleFile> bundleFiles) throws Exception {
         BundleZip bundleZip = new BundleZip(bundleFiles.stream().collect(Collectors.toMap(BundleFile::getName, BundleFile::getContent)));
-        List<String> forms = bundleZip.getForms();
         for (String filename : fileSequence) {
-            if (filename.equals("forms")) {
-                for (String form : forms) deployFile("form", form, bundleFiles);
+            Optional<BundleFolder> fromFileName = BundleFolder.getFromFileName(filename);
+            if(fromFileName.isPresent()) {
+                deployFolder(fromFileName.get(), bundleFiles, bundleZip);
             } else {
-                byte[] fileData = bundleZip.getFile(filename);
-                if (fileData != null) {
-                    deployFile(filename, new String(fileData, StandardCharsets.UTF_8), bundleFiles);
-                }
+                deployFileIfDataExists(bundleFiles, bundleZip, filename);
             }
         }
         List<String> extensions = bundleZip.getExtensionNames();
@@ -203,16 +229,30 @@ public class BundleZipFileImporter implements ItemWriter<BundleFile> {
         }
     }
 
-    private String uploadIcon(BundleFile bundleFile) throws IOException {
-        String completePath = bundleFile.getName();
-        logger.info("uploading icon {}", completePath);
-        String[] fileName = completePath.replace(format("%s/", SUBJECT_ICON_DIRECTORY), "").split("\\.");
-        String subjectTypeUUID = fileName[0];
-        String extension = fileName[1];
-        return this.s3Service.uploadByteArray(subjectTypeUUID, extension, "icons", bundleFile.getContent());
+    private String uploadIcon(String iconFileName, byte[] iconFileData) throws IOException {
+        String bucketName = "icons";
+        logger.info("uploading icon {}", iconFileName);
+        String[] splitFileName = iconFileName.split("\\.");
+        String entityUUID = splitFileName[0];
+        String extension = splitFileName[1];
+        return s3Service.uploadByteArray(entityUUID, extension, bucketName, iconFileData);
     }
 
-    private void deployFile(String fileName, String fileData, List<? extends BundleFile> bundleFiles) throws IOException, FormBuilderException, BuilderException {
+    private void deployFileIfDataExists(List<? extends BundleFile> bundleFiles, BundleZip bundleZip, String filename) throws IOException, FormBuilderException, ValidationException {
+        byte[] fileData = bundleZip.getFile(filename);
+        if (fileData != null) {
+            deployFile(filename, new String(fileData, StandardCharsets.UTF_8), bundleFiles);
+        }
+    }
+
+    private void deployFolder(BundleFolder bundleFolder, List<? extends BundleFile> bundleFiles, BundleZip bundleZip) throws IOException, FormBuilderException {
+        Map<String, byte[]> files = bundleZip.getFileNameAndDataInFolder(bundleFolder.getFolderName());
+        for (Map.Entry fileEntry : files.entrySet()) {
+            deployFile(bundleFolder, fileEntry, bundleFiles);
+        }
+    }
+
+    private void deployFile(String fileName, String fileData, List<? extends BundleFile> bundleFiles) throws IOException, FormBuilderException, BuilderException, ValidationException {
         logger.info("processing file {}", fileName);
         Organisation organisation = UserContextHolder.getUserContext().getOrganisation();
         switch (fileName) {
@@ -237,13 +277,10 @@ public class BundleZipFileImporter implements ItemWriter<BundleFile> {
             case "subjectTypes.json":
                 SubjectTypeContract[] subjectTypeContracts = convertString(fileData, SubjectTypeContract[].class);
                 for (SubjectTypeContract subjectTypeContract : subjectTypeContracts) {
-                    String iconFileName = format("%s/%s", SUBJECT_ICON_DIRECTORY, subjectTypeContract.getUuid());
-                    BundleFile iconFile = bundleFiles.stream().filter(f -> f.getName().contains(iconFileName)).findFirst().orElse(null);
-                    if (iconFile != null) {
-                        String s3ObjectKey = uploadIcon(iconFile);
-                        subjectTypeContract.setIconFileS3Key(s3ObjectKey);
+                    SubjectTypeService.SubjectTypeUpsertResponse response = subjectTypeService.saveSubjectType(subjectTypeContract);
+                    if(response.isSubjectTypeNotPresentInDB() && Subject.valueOf(subjectTypeContract.getType()).equals(Subject.User)) {
+                        subjectTypeService.launchUserSubjectTypeJob(response.getSubjectType());
                     }
-                    subjectTypeService.saveSubjectType(subjectTypeContract);
                 }
                 break;
             case "operationalSubjectTypes.json":
@@ -285,11 +322,6 @@ public class BundleZipFileImporter implements ItemWriter<BundleFile> {
             case "concepts.json":
                 ConceptContract[] conceptContracts = convertString(fileData, ConceptContract[].class);
                 conceptService.saveOrUpdateConcepts(Arrays.asList(conceptContracts));
-                break;
-            case "form":
-                FormContract formContract = convertString(fileData, FormContract.class);
-                formContract.validate();
-                formService.saveForm(formContract);
                 break;
             case "formMappings.json":
                 FormMappingContract[] formMappingContracts = convertString(fileData, FormMappingContract[].class);
@@ -339,6 +371,10 @@ public class BundleZipFileImporter implements ItemWriter<BundleFile> {
                 GroupPrivilegeContractWeb[] groupPrivilegeContracts = convertString(fileData, GroupPrivilegeContractWeb[].class);
                 groupPrivilegeService.savePrivileges(groupPrivilegeContracts, organisation);
                 break;
+            case "groupDashboards.json":
+                GroupDashboardBundleContract[] contracts = convertString(fileData, GroupDashboardBundleContract[].class);
+                groupDashboardService.saveFromBundle(Arrays.asList(contracts));
+                break;
             case "video.json":
                 VideoContract[] videoContracts = convertString(fileData, VideoContract[].class);
                 for (VideoContract videoContract : videoContracts) {
@@ -383,12 +419,58 @@ public class BundleZipFileImporter implements ItemWriter<BundleFile> {
                     messageRule = MessageRuleContract.toModel(messageRuleContract, messageRule, entityTypeRetrieverService);
                     messagingService.saveRule(messageRule);
                 }
+                break;
+            case "ruleDependency.json":
+                RuleDependencyRequest ruleDependencyRequest = convertString(fileData, RuleDependencyRequest.class);
+                ruleDependencyService.uploadRuleDependency(ruleDependencyRequest, organisation);
+                break;
+        }
+    }
+
+    private void deployFile(BundleFolder bundleFolder, Map.Entry<String, byte[]> fileData, List<? extends BundleFile> bundleFiles) throws IOException, FormBuilderException, BuilderException {
+        logger.info("processing folder {} file {}", bundleFolder.getModifiedFileName(), fileData.getKey());
+        Organisation organisation = UserContextHolder.getUserContext().getOrganisation();
+        switch (bundleFolder) {
+            case FORMS:
+                FormContract formContract = convertString(fileData.getValue(), FormContract.class);
+                formContract.validate();
+                formService.saveForm(formContract);
+                break;
+            case TRANSLATIONS:
+                TranslationContract translationContract = new TranslationContract();
+                String language = fileData.getKey().substring(0, fileData.getKey().indexOf(SEPARATOR_FOR_EXTENSION));
+                translationContract.setLanguage(Locale.valueOf(language));
+                translationContract.setTranslationJson(convertString(fileData.getValue(), JsonObject.class));
+                translationService.uploadTranslations(translationContract, organisation);
+                break;
+            case OLD_RULES:
+                RuleRequest ruleRequest = convertString(fileData.getValue(), RuleRequest.class);
+                ruleService.createOrUpdate(ruleRequest, organisation);
+                break;
+            case SUBJECT_TYPE_ICONS:
+                String stS3ObjectKey = uploadIcon(fileData.getKey(), fileData.getValue());
+                String subjectTypeUUID = fileData.getKey().substring(0, fileData.getKey().indexOf(SEPARATOR_FOR_EXTENSION));
+                SubjectType subjectType = subjectTypeRepository.findByUuid(subjectTypeUUID);
+                subjectType.setIconFileS3Key(stS3ObjectKey);
+                subjectTypeRepository.save(subjectType);
+                break;
+            case REPORT_CARD_ICONS:
+                String cs3ObjectKey = uploadIcon(fileData.getKey(), fileData.getValue());
+                String reportCardUUID = fileData.getKey().substring(0, fileData.getKey().indexOf(SEPARATOR_FOR_EXTENSION));
+                Card card = cardRepository.findByUuid(reportCardUUID);
+                card.setIconFileS3Key(cs3ObjectKey);
+                cardRepository.save(card);
+                break;
         }
     }
 
     public void deployFile(String filePath, byte[] contents) throws IOException {
         if (filePath.contains(OrganisationConfig.Extension.EXTENSION_DIR))
             s3Service.uploadInOrganisation(filePath, contents);
+    }
+
+    private <T> T convertString(byte[] data, Class<T> convertTo) throws IOException {
+        return convertString(new String(data, StandardCharsets.UTF_8),convertTo);
     }
 
     private <T> T convertString(String data, Class<T> convertTo) throws IOException {

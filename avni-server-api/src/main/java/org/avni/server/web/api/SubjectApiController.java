@@ -11,6 +11,7 @@ import org.avni.server.util.S;
 import org.avni.server.web.request.api.ApiSubjectRequest;
 import org.avni.server.web.request.api.DeleteSubjectCriteria;
 import org.avni.server.web.request.api.RequestUtils;
+import org.avni.server.web.request.api.SubjectResponseOptions;
 import org.avni.server.web.response.ResponsePage;
 import org.avni.server.web.response.SubjectResponse;
 import org.avni.server.web.response.api.DeleteSubjectsResponse;
@@ -78,6 +79,7 @@ public class SubjectApiController {
                                     @RequestParam(value = "subjectType", required = false) String subjectTypeName,
                                     @RequestParam(value = "concepts", required = false) String concepts,
                                     @RequestParam(value = "locationIds", required = false) List<String> locationUUIDs,
+                                    @RequestParam(value = "includeCatchments", required = false) Boolean includeCatchments,
                                     Pageable pageable) {
         Page<Individual> subjects;
         List<Long> allLocationIds = locationService.getAllWithChildrenForUUIDs(locationUUIDs);
@@ -86,7 +88,7 @@ public class SubjectApiController {
         subjects = individualRepository.findSubjects(individualSearchParams, pageable);
         List<GroupSubject> groupsOfAllMemberSubjects = groupSubjectRepository.findAllByMemberSubjectIn(subjects.getContent());
         ArrayList<SubjectResponse> subjectResponses = new ArrayList<>();
-        subjects.forEach(subject -> subjectResponses.add(SubjectResponse.fromSubject(subject, !S.isEmpty(subjectTypeName), conceptRepository, conceptService, findGroupAffiliation(subject, groupsOfAllMemberSubjects), s3Service)));
+        subjects.forEach(subject -> subjectResponses.add(SubjectResponse.fromSubject(subject, SubjectResponseOptions.forSubjectList(S.isEmpty(subjectTypeName), includeCatchments), conceptRepository, conceptService, findGroupAffiliation(subject, groupsOfAllMemberSubjects), s3Service)));
         accessControlService.checkSubjectPrivileges(PrivilegeType.ViewSubject, subjects.getContent());
         return new ResponsePage(subjectResponses, subjects.getNumberOfElements(), subjects.getTotalPages(), subjects.getSize());
     }
@@ -94,14 +96,15 @@ public class SubjectApiController {
     @GetMapping(value = "/api/subject/{id}")
     @PreAuthorize(value = "hasAnyAuthority('user')")
     @ResponseBody
-    public ResponseEntity<SubjectResponse> get(@PathVariable("id") String legacyIdOrUuid) {
+    public ResponseEntity<SubjectResponse> get(@PathVariable("id") String legacyIdOrUuid,
+                                               @RequestParam(value = "includeCatchments", required = false) Boolean includeCatchments) {
         Individual subject = individualRepository.findByLegacyIdOrUuid(legacyIdOrUuid);
         if (subject == null)
             return new ResponseEntity<>(HttpStatus.NOT_FOUND);
 
         accessControlService.checkSubjectPrivilege(PrivilegeType.ViewSubject, subject.getSubjectType());
         List<GroupSubject> groupsOfAllMemberSubjects = groupSubjectRepository.findAllByMemberSubjectIn(Collections.singletonList(subject));
-        return new ResponseEntity<>(SubjectResponse.fromSubject(subject, true, conceptRepository, conceptService, groupsOfAllMemberSubjects, s3Service), HttpStatus.OK);
+        return new ResponseEntity<>(SubjectResponse.fromSubject(subject, SubjectResponseOptions.forSingleSubject(includeCatchments), conceptRepository, conceptService, groupsOfAllMemberSubjects, s3Service), HttpStatus.OK);
     }
 
     @PostMapping(value = "/api/subject")
@@ -111,10 +114,10 @@ public class SubjectApiController {
     public ResponseEntity post(@RequestBody ApiSubjectRequest request) throws IOException {
         accessControlService.checkSubjectPrivilege(PrivilegeType.EditSubject, request.getSubjectType());
         Individual subject = getOrCreateSubject(request.getExternalId());
-        return updateSubjectAndSave(request, subject);
+        return updateSubjectAndSave(request, subject, SubjectResponseOptions.forSubjectUpdate());
     }
 
-    private ResponseEntity updateSubjectAndSave(@RequestBody ApiSubjectRequest request, Individual subject) throws IOException {
+    private ResponseEntity updateSubjectAndSave(@RequestBody ApiSubjectRequest request, Individual subject, SubjectResponseOptions options) throws IOException {
         try {
             updateSubjectDetails(subject, request);
         } catch (ValidationException ve) {
@@ -122,7 +125,7 @@ public class SubjectApiController {
         }
         mediaObservationService.processMediaObservations(subject.getObservations());
         Individual savedIndividual = individualService.save(subject);
-        return new ResponseEntity<>(SubjectResponse.fromSubject(savedIndividual, true, conceptRepository, conceptService, s3Service), HttpStatus.OK);
+        return new ResponseEntity<>(SubjectResponse.fromSubject(savedIndividual, options, conceptRepository, conceptService, s3Service), HttpStatus.OK);
     }
 
     @PutMapping(value = "/api/subject/{id}")
@@ -132,7 +135,7 @@ public class SubjectApiController {
     public ResponseEntity put(@PathVariable String id, @RequestBody ApiSubjectRequest request) throws IOException, ValidationException {
         accessControlService.checkSubjectPrivilege(PrivilegeType.EditSubject, request.getSubjectType());
         Individual subject = loadSubject(id, request.getExternalId());
-        return updateSubjectAndSave(request, subject);
+        return updateSubjectAndSave(request, subject, SubjectResponseOptions.forSubjectUpdate());
     }
 
     private Individual loadSubject(String id, String externalId) {
@@ -161,7 +164,7 @@ public class SubjectApiController {
         Set<String> observationKeys = request.containsKey(OBSERVATIONS) ? ((Map<String, Object>) request.get(OBSERVATIONS)).keySet() : new HashSet<>();
         mediaObservationService.patchMediaObservations(subject.getObservations(), observationKeys);
         Individual savedIndividual = individualService.save(subject);
-        return new ResponseEntity<>(SubjectResponse.fromSubject(savedIndividual, true, conceptRepository, conceptService, s3Service), HttpStatus.OK);
+        return new ResponseEntity<>(SubjectResponse.fromSubject(savedIndividual, SubjectResponseOptions.forSubjectUpdate(), conceptRepository, conceptService, s3Service), HttpStatus.OK);
     }
 
     @DeleteMapping(value = "/api/subject/{id}")
@@ -176,7 +179,7 @@ public class SubjectApiController {
         List<GroupSubject> groupsOfAllMemberSubjects = groupSubjectRepository.findAllByMemberSubjectIn(Collections.singletonList(subject));
         subject = individualService.voidSubject(subject);
         return new ResponseEntity<>(SubjectResponse.fromSubject(subject,
-                true, conceptRepository, conceptService, groupsOfAllMemberSubjects, s3Service), HttpStatus.OK);
+                SubjectResponseOptions.forSubjectUpdate(), conceptRepository, conceptService, groupsOfAllMemberSubjects, s3Service), HttpStatus.OK);
     }
 
     @DeleteMapping(value = "/api/subjectTree")
@@ -186,7 +189,7 @@ public class SubjectApiController {
         accessControlService.checkPrivilege(PrivilegeType.MultiTxEntityTypeUpdate);
         DeleteSubjectsResponse deleteSubjectsResponse = new DeleteSubjectsResponse();
         for (Long addressId : deleteSubjectCriteria.getAddressIds()) {
-            AddressLevel addressLevel = locationRepository.findById(addressId).orElseGet(null);
+            AddressLevel addressLevel = locationRepository.findEntity(addressId);
             if (addressLevel == null)
                 deleteSubjectsResponse.addNotFoundAddress(addressId);
             else {
@@ -213,7 +216,7 @@ public class SubjectApiController {
         subject.setRegistrationDate(request.getRegistrationDate());
         ObservationCollection observations = RequestUtils.createObservations(request.getObservations(), conceptRepository);
         AddressLevel newAddressLevel = addressLevel.orElse(null);
-        subjectMigrationService.markSubjectMigrationIfRequired(subject.getUuid(), newAddressLevel, observations, false);
+        subjectMigrationService.markSubjectMigrationIfRequired(subject.getUuid(), null, newAddressLevel, null, observations, false);
         subject.setAddressLevel(newAddressLevel);
         if (subjectType.isPerson()) {
             subject.setDateOfBirth(request.getDateOfBirth());
@@ -288,7 +291,7 @@ public class SubjectApiController {
             Optional<AddressLevel> addressLevel = locationRepository.findByTitleLineageIgnoreCase(locationTitleLineage);
             AddressLevel newAddressLevel = addressLevel.orElseThrow(() -> new IllegalArgumentException(String.format("Address '%s' not found", locationTitleLineage)));
             subject.setAddressLevel(newAddressLevel);
-            subjectMigrationService.markSubjectMigrationIfRequired(subject.getUuid(), newAddressLevel, subject.getObservations(), false);
+            subjectMigrationService.markSubjectMigrationIfRequired(subject.getUuid(), null, newAddressLevel, null, subject.getObservations(), false);
         }
 
         if (subject.getSubjectType().isPerson()) {

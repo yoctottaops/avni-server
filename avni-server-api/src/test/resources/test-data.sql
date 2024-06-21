@@ -3,14 +3,16 @@ DELETE FROM form_element;
 DELETE FROM form_element_group;
 DELETE FROM form_mapping;
 DELETE FROM form;
+DELETE FROM user_subject;
 DELETE FROM encounter;
 DELETE FROM program_encounter;
 DELETE FROM program_enrolment;
 DELETE FROM subject_migration;
 DELETE FROM individual;
+DELETE FROM operational_program;
 DELETE FROM program;
+DELETE FROM operational_encounter_type;
 DELETE FROM encounter_type;
-DELETE FROM program_outcome;
 DELETE FROM concept_answer;
 DELETE FROM answer_concept_migration;
 DELETE FROM concept;
@@ -47,7 +49,6 @@ ALTER SEQUENCE program_enrolment_id_seq RESTART WITH 1;
 ALTER SEQUENCE individual_id_seq RESTART WITH 1;
 ALTER SEQUENCE program_id_seq RESTART WITH 1;
 ALTER SEQUENCE encounter_type_id_seq RESTART WITH 1;
-ALTER SEQUENCE program_outcome_id_seq RESTART WITH 1;
 ALTER SEQUENCE concept_answer_id_seq RESTART WITH 1;
 ALTER SEQUENCE concept_id_seq RESTART WITH 1;
 ALTER SEQUENCE gender_id_seq RESTART WITH 1;
@@ -259,14 +260,14 @@ VALUES ('5378dce3-247e-4393-8dd5-032c6eb0a655', 1, 1, current_timestamp, FALSE, 
         (select id from subject_type where name = 'Individual'), '{}'::jsonb, 1, 1, now(), now());
 
 
-INSERT INTO program_enrolment (individual_id, program_id, enrolment_date_time, uuid, version, created_by_id, last_modified_by_id, created_date_time, last_modified_date_time, address_id)
-VALUES (1, 1, current_timestamp, 'ba0a3b91-2d4d-446b-a3ee-d56e7edaf3d3', 1, 1, 1, now(), now(), 1);
+INSERT INTO program_enrolment (organisation_id, individual_id, program_id, enrolment_date_time, uuid, version, created_by_id, last_modified_by_id, created_date_time, last_modified_date_time, address_id)
+VALUES (2, 1, 1, current_timestamp, 'ba0a3b91-2d4d-446b-a3ee-d56e7edaf3d3', 1, 1, 1, now(), now(), 1);
 
-INSERT INTO program_encounter (program_enrolment_id, encounter_type_id, observations, encounter_date_time, uuid, version, created_by_id, last_modified_by_id, created_date_time, last_modified_date_time, individual_id, address_id)
-VALUES (1, 1, '{"95c4b174-6ce6-4d9a-b223-1f9000b60006":98.9}' :: JSONB, current_timestamp, 'f5c3d56c-3d69-41bd-9e6a-52963adb6e76', 1, 1, 1, now(), now(), 1, 1);
+INSERT INTO program_encounter (organisation_id, program_enrolment_id, encounter_type_id, observations, encounter_date_time, uuid, version, created_by_id, last_modified_by_id, created_date_time, last_modified_date_time, individual_id, address_id)
+VALUES (2, 1, 1, '{"95c4b174-6ce6-4d9a-b223-1f9000b60006":98.9}' :: JSONB, current_timestamp, 'f5c3d56c-3d69-41bd-9e6a-52963adb6e76', 1, 1, 1, now(), now(), 1, 1);
 
-INSERT INTO encounter (individual_id, encounter_type_id, observations, encounter_date_time, uuid, version, created_by_id, last_modified_by_id, created_date_time, last_modified_date_time, address_id)
-VALUES (1, 1, '
+INSERT INTO encounter (organisation_id, individual_id, encounter_type_id, observations, encounter_date_time, uuid, version, created_by_id, last_modified_by_id, created_date_time, last_modified_date_time, address_id)
+VALUES (2, 1, 1, '
 {
   "conceptUUID": "95c4b174-6ce6-4d9a-b223-1f9000b60006",
   "valuePrimitive": 98.9
@@ -377,8 +378,6 @@ SELECT setval('program_id_seq', COALESCE((SELECT MAX(id) + 1
                                           FROM program), 1), FALSE);
 SELECT setval('encounter_type_id_seq', COALESCE((SELECT MAX(id) + 1
                                                  FROM encounter_type), 1), FALSE);
-SELECT setval('program_outcome_id_seq', COALESCE((SELECT MAX(id) + 1
-                                                  FROM program_outcome), 1), FALSE);
 SELECT setval('concept_answer_id_seq', COALESCE((SELECT MAX(id) + 1
                                                  FROM concept_answer), 1), FALSE);
 SELECT setval('concept_id_seq', COALESCE((SELECT MAX(id) + 1
