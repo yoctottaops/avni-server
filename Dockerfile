@@ -13,7 +13,7 @@
 # RUN mkdir -p /opt/openchs/static
 # RUN cp -r build/* /opt/openchs/static/
 
-FROM openjdk:11-jdk
+FROM openjdk:8-jdk
 
 RUN curl -s https://deb.nodesource.com/setup_18.x | bash
 RUN apt-get install -y nodejs
