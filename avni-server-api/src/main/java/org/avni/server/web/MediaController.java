@@ -84,7 +84,7 @@ public class MediaController {
         if (user.getCatchment() == null) {
             throw new ValidationException("NoCatchmentFound");
         }
-        String catchmentUuid = user.getCatchment().getUuid();
+        String catchmentUuid = user.getUuid();
         return format("MobileDbBackup-%s", catchmentUuid);
     }
 
